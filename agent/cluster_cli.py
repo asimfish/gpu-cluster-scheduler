@@ -320,6 +320,129 @@ def cmd_prune_logs(args):
     print(f"removed {total} log files older than {args.older_than_hours}h")
 
 
+
+def cmd_info(args):
+    """显示单个任务的完整详情"""
+    base = _base()
+    rec = _find_task_record(base, args.task_id)
+    if rec is None:
+        print(f"[err] task not found: {args.task_id}")
+        sys.exit(1)
+    stage, p, d = rec
+    print(f"{C_BOLD}Task: {d.get('task_id', '?')}{C_RESET}  [{stage}]")
+    print(f"{'─' * 60}")
+    fields = [
+        ("Project", "project"), ("CMD", "cmd"), ("CWD", "cwd"),
+        ("Host", "host"), ("GPU IDs", "gpu_ids"), ("GPU Count", "gpu_count"),
+        ("GPU Mem GB", "gpu_mem_gb"), ("Priority", "priority"),
+        ("Submit Time", "submit_time"), ("Submit By", "submit_by"),
+        ("Start Time", "start_time"), ("End Time", "end_time"),
+        ("Elapsed", "elapsed_sec"), ("Return Code", "return_code"),
+        ("Max Retries", "max_retries"), ("Retry Count", "retry_count"),
+        ("Retry Delay", "retry_delay_sec"), ("Depends On", "depends_on"),
+        ("Prefer Hosts", "prefer_hosts"), ("Exclude Hosts", "exclude_hosts"),
+        ("Timeout (h)", "timeout_h"), ("Fail Reason", "fail_reason"),
+        ("Note", "note"), ("PID", "pid"), ("Log Path", "log_path"),
+    ]
+    for label, key in fields:
+        val = d.get(key)
+        if val is None or val == "" or val == [] or val == {}:
+            continue
+        if key == "elapsed_sec":
+            val = _fmt_eta(val)
+        if key == "start_time" or key == "end_time":
+            import datetime
+            try:
+                val = datetime.datetime.fromtimestamp(val).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+        print(f"  {C_CYAN}{label:<16}{C_RESET} {val}")
+    env = d.get("env", {})
+    if env:
+        print(f"  {C_CYAN}{'Env':<16}{C_RESET}", end="")
+        for k, v in env.items():
+            print(f" {k}={v}", end="")
+        print()
+    if d.get("tail"):
+        print(f"\n{C_BOLD}Last output:{C_RESET}")
+        for line in d["tail"][-15:]:
+            print(f"  {C_GREY}{line}{C_RESET}")
+
+
+def cmd_stats(args):
+    """历史执行统计"""
+    base = _base()
+    now = time.time()
+    cutoff = now - args.hours * 3600
+
+    all_tasks = []
+    for stage in ["done", "failed", "running"]:
+        for p in (base / "tasks" / stage).glob("*.json"):
+            d = read_json(p) or {}
+            d["_stage"] = stage
+            all_tasks.append(d)
+
+    done = [t for t in all_tasks if t["_stage"] == "done"]
+    failed = [t for t in all_tasks if t["_stage"] == "failed"]
+    running = [t for t in all_tasks if t["_stage"] == "running"]
+
+    recent_done = [t for t in done if t.get("end_time", 0) > cutoff]
+    recent_failed = [t for t in failed if t.get("end_time", 0) > cutoff]
+
+    print(f"{C_BOLD}== Task Statistics (last {args.hours}h) =={C_RESET}\n")
+    print(f"  Total done:    {C_GREEN}{len(done)}{C_RESET} (recent: {len(recent_done)})")
+    print(f"  Total failed:  {C_RED}{len(failed)}{C_RESET} (recent: {len(recent_failed)})")
+    print(f"  Now running:   {C_CYAN}{len(running)}{C_RESET}")
+
+    if recent_done:
+        elapsed_list = [t.get("elapsed_sec", 0) for t in recent_done if t.get("elapsed_sec")]
+        if elapsed_list:
+            avg_sec = sum(elapsed_list) / len(elapsed_list)
+            max_sec = max(elapsed_list)
+            total_gpu_h = sum(len(t.get("gpu_ids", [1])) * t.get("elapsed_sec", 0)
+                              for t in recent_done) / 3600
+            print(f"\n  Avg runtime:   {_fmt_eta(avg_sec)}")
+            print(f"  Max runtime:   {_fmt_eta(max_sec)}")
+            print(f"  GPU hours:     {total_gpu_h:.1f}h")
+
+    # Per-host breakdown
+    host_stats = {}
+    for t in recent_done + recent_failed:
+        h = t.get("host", "?")
+        if h not in host_stats:
+            host_stats[h] = {"done": 0, "failed": 0, "gpu_h": 0.0}
+        if t["_stage"] == "done":
+            host_stats[h]["done"] += 1
+        else:
+            host_stats[h]["failed"] += 1
+        host_stats[h]["gpu_h"] += len(t.get("gpu_ids", [1])) * t.get("elapsed_sec", 0) / 3600
+
+    if host_stats:
+        print(f"\n  {C_BOLD}Per-host:{C_RESET}")
+        for h, s in sorted(host_stats.items()):
+            sr = s["done"] / max(s["done"] + s["failed"], 1) * 100
+            print(f"    {h:<10} done={C_GREEN}{s['done']}{C_RESET} "
+                  f"failed={C_RED}{s['failed']}{C_RESET} "
+                  f"success={sr:.0f}% gpu_h={s['gpu_h']:.1f}")
+
+    # Per-project breakdown
+    proj_stats = {}
+    for t in recent_done + recent_failed:
+        proj = t.get("project", "?")
+        if proj not in proj_stats:
+            proj_stats[proj] = {"done": 0, "failed": 0}
+        if t["_stage"] == "done":
+            proj_stats[proj]["done"] += 1
+        else:
+            proj_stats[proj]["failed"] += 1
+
+    if proj_stats:
+        print(f"\n  {C_BOLD}Per-project:{C_RESET}")
+        for proj, s in sorted(proj_stats.items()):
+            print(f"    {proj:<20} done={C_GREEN}{s['done']}{C_RESET} "
+                  f"failed={C_RED}{s['failed']}{C_RESET}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cluster", description="SafeTransport Cluster CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -389,6 +512,16 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("prune-logs", help="清理旧日志")
     s.add_argument("--older-than-hours", type=float, default=720)
     s.set_defaults(func=cmd_prune_logs)
+
+    # info
+    s = sub.add_parser("info", help="查看单个任务的完整详情")
+    s.add_argument("task_id")
+    s.set_defaults(func=cmd_info)
+
+    # stats
+    s = sub.add_parser("stats", help="历史执行统计")
+    s.add_argument("--hours", type=float, default=168, help="统计最近多少小时 (默认 7 天)")
+    s.set_defaults(func=cmd_stats)
 
     return p
 

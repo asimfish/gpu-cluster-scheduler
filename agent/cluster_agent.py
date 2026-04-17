@@ -577,18 +577,45 @@ class Agent:
                     self.notifier.notify_task_failed(d)
 
     def _kill_own(self, pid: int):
-        """只 kill 自己启动的 pgid"""
+        """安全终止自己启动的进程组: SIGTERM -> 等待 -> SIGKILL -> waitpid 清理"""
         if pid not in self.owned_pids:
             log.error("refuse to kill non-owned pid=%s", pid)
             return
         try:
             os.killpg(pid, signal.SIGTERM)
-            time.sleep(3)
+        except ProcessLookupError:
+            return
+        except Exception as e:
+            log.warning("kill SIGTERM failed %s: %s", pid, e)
+            return
+        for _ in range(6):
+            time.sleep(0.5)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                log.info("pid %s exited after SIGTERM", pid)
+                self._waitpid_nohang(pid)
+                return
+            except Exception:
+                break
+        try:
             os.killpg(pid, signal.SIGKILL)
+            log.warning("pid %s required SIGKILL", pid)
         except ProcessLookupError:
             pass
         except Exception as e:
-            log.warning("kill failed %s: %s", pid, e)
+            log.warning("kill SIGKILL failed %s: %s", pid, e)
+        self._waitpid_nohang(pid)
+
+    @staticmethod
+    def _waitpid_nohang(pid: int):
+        """回收僵尸进程,防止 zombie 堆积"""
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        except Exception:
+            pass
 
 
     # --------- recovery (重启后恢复) ----------

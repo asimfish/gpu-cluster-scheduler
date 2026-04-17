@@ -139,6 +139,7 @@ class Notifier:
             },
         }
         data = json.dumps(payload).encode("utf-8")
+        webhook = self._resolve_env(webhook)
         req = urllib.request.Request(
             webhook, data=data,
             headers={"Content-Type": "application/json"},
@@ -146,10 +147,23 @@ class Notifier:
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
 
+    @staticmethod
+    def _resolve_env(val: str) -> str:
+        """支持 ${ENV_VAR} 和 $ENV_VAR 语法引用环境变量,避免明文密码"""
+        if not isinstance(val, str):
+            return val
+        import re
+        def replacer(m):
+            name = m.group(1) or m.group(2)
+            return os.environ.get(name, m.group(0))
+        return re.sub(r'\$\{([^}]+)\}|\$([A-Z_][A-Z0-9_]*)', replacer, val)
+
     def _send_email(self, cfg: Dict, title: str, body: str):
+        smtp_user = self._resolve_env(cfg["smtp_user"])
+        smtp_pass = self._resolve_env(cfg["smtp_pass"])
         msg = MIMEText(body, "plain", "utf-8")
         msg["Subject"] = f"[Cluster] {title}"
-        msg["From"] = cfg["smtp_user"]
+        msg["From"] = smtp_user
         msg["To"] = ", ".join(cfg["to"])
         if cfg.get("use_ssl", True):
             server = smtplib.SMTP_SSL(cfg["smtp_host"], int(cfg.get("smtp_port", 465)),
@@ -158,8 +172,8 @@ class Notifier:
             server = smtplib.SMTP(cfg["smtp_host"], int(cfg.get("smtp_port", 587)),
                                   timeout=10)
             server.starttls()
-        server.login(cfg["smtp_user"], cfg["smtp_pass"])
-        server.sendmail(cfg["smtp_user"], cfg["to"], msg.as_string())
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(smtp_user, cfg["to"], msg.as_string())
         server.quit()
 
     def _send_webhook(self, url: str, headers: Dict, title: str, body: str, level: str):
@@ -168,6 +182,7 @@ class Notifier:
         data = json.dumps(payload).encode("utf-8")
         h = {"Content-Type": "application/json"}
         h.update(headers)
+        url = self._resolve_env(url)
         req = urllib.request.Request(url, data=data, headers=h)
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
