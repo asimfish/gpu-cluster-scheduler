@@ -367,6 +367,32 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_kill)
 
 
+    # submit-dag
+    s = sub.add_parser("submit-dag", help="提交 DAG 工作流 (多 stage 级联)")
+    s.add_argument("file")
+    s.set_defaults(func=cmd_submit_dag)
+
+    # retry
+    s = sub.add_parser("retry", help="手动重试 failed/done 的任务")
+    s.add_argument("task_id")
+    s.add_argument("--reset-retries", action="store_true", help="重置重试计数")
+    s.add_argument("--max-retries", type=int, default=None, help="更新最大重试次数")
+    s.set_defaults(func=cmd_retry)
+
+    # clean
+    s = sub.add_parser("clean", help="清理历史任务记录")
+    s.add_argument("--stages", nargs="+", default=["done", "failed"])
+    s.add_argument("--older-than-hours", type=float, default=168)
+    s.set_defaults(func=cmd_clean)
+
+    # prune-logs
+    s = sub.add_parser("prune-logs", help="清理旧日志")
+    s.add_argument("--older-than-hours", type=float, default=720)
+    s.set_defaults(func=cmd_prune_logs)
+
+    return p
+
+
 def cmd_retry(args):
     """手动将 failed 任务重回 pending"""
     base = _base()
@@ -463,26 +489,6 @@ def cmd_submit_dag(args):
 
     print(f"\n[ok] DAG submitted: {len(all_ids)} tasks across {len(stages)} stages")
 
-    s = sub.add_parser("submit-dag", help="提交 DAG 工作流 (多 stage 级联)")
-    s.add_argument("file")
-    s.set_defaults(func=cmd_submit_dag)
-
-    s = sub.add_parser("retry", help="手动重试 failed/done 的任务")
-    s.add_argument("task_id")
-    s.add_argument("--reset-retries", action="store_true", help="重置重试计数")
-    s.add_argument("--max-retries", type=int, default=None, help="更新最大重试次数")
-    s.set_defaults(func=cmd_retry)
-
-    s = sub.add_parser("clean", help="清理历史任务记录")
-    s.add_argument("--stages", nargs="+", default=["done", "failed"])
-    s.add_argument("--older-than-hours", type=float, default=168)
-    s.set_defaults(func=cmd_clean)
-
-    s = sub.add_parser("prune-logs", help="清理旧日志")
-    s.add_argument("--older-than-hours", type=float, default=720)
-    s.set_defaults(func=cmd_prune_logs)
-
-    return p
 
 
 def main():
