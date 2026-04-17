@@ -447,6 +447,117 @@ def cmd_stats(args):
                   f"failed={C_RED}{s['failed']}{C_RESET}")
 
 
+def cmd_who(args):
+    """显示全集群每个用户的 GPU 使用情况 —— 多人共享时的核心命令"""
+    base = _base()
+    cfg = load_yaml(base / "config.yaml")
+    hb_dir = base / "heartbeat"
+    now = time.time()
+    dead_after = cfg.get("scheduler", {}).get("dead_after_sec", 60)
+
+    # user -> {gpus: [{host, gpu_idx, mem_mb, process}], total_mem_gb, gpu_count}
+    user_usage = {}
+    node_summaries = []
+
+    for n in cfg.get("nodes", []):
+        if not n.get("enabled", True):
+            continue
+        name = n["name"]
+        hb_path = hb_dir / f"{name}.json"
+        d = read_json(hb_path)
+        if not d:
+            continue
+        age = now - d.get("time", 0)
+        if age > dead_after:
+            continue
+
+        gpus = d.get("gpus", [])
+        node_gpu_users = {}  # user -> count for this node
+
+        for g in gpus:
+            for proc in g.get("processes", []):
+                user = proc.get("user", "?")
+                mem_mb = proc.get("mem_mb", 0)
+                pname = proc.get("name", "")
+
+                if user not in user_usage:
+                    user_usage[user] = {"gpus": [], "total_mem_gb": 0.0, "gpu_count": 0,
+                                        "hosts": set(), "process_count": 0}
+                user_usage[user]["gpus"].append({
+                    "host": name, "gpu": g.get("index", 0),
+                    "mem_mb": mem_mb, "proc": pname[:30],
+                })
+                user_usage[user]["total_mem_gb"] += mem_mb / 1024
+                user_usage[user]["hosts"].add(name)
+                user_usage[user]["process_count"] += 1
+
+                if user not in node_gpu_users:
+                    node_gpu_users[user] = set()
+                node_gpu_users[user].add(g.get("index", 0))
+
+        # 统计每个用户占了几张卡
+        for user, gpu_set in node_gpu_users.items():
+            user_usage[user]["gpu_count"] += len(gpu_set)
+
+        node_summaries.append((name, node_gpu_users, gpus))
+
+    if not user_usage:
+        print(f"{C_GREY}no GPU usage detected (no heartbeat or all idle){C_RESET}")
+        return
+
+    # 按显存占用排序
+    sorted_users = sorted(user_usage.items(), key=lambda x: -x[1]["total_mem_gb"])
+
+    print(f"{C_BOLD}== GPU Usage by User =={C_RESET}  (across all live nodes)\n")
+    print(f"{'USER':<15} {'GPUs':<6} {'VRAM':<10} {'PROCS':<7} {'HOSTS'}")
+    print("─" * 65)
+
+    colors = [C_CYAN, C_GREEN, C_YELLOW, C_RED, C_BLUE, "\x1b[35m"]
+    for idx, (user, info) in enumerate(sorted_users):
+        color = colors[idx % len(colors)]
+        hosts_str = ", ".join(sorted(info["hosts"]))
+        print(f"{color}{user:<15}{C_RESET} {info['gpu_count']:<6} "
+              f"{info['total_mem_gb']:>6.1f}GB   {info['process_count']:<7} {hosts_str}")
+
+    if args.verbose:
+        print(f"\n{C_BOLD}Detail by node:{C_RESET}")
+        for name, node_users, gpus in node_summaries:
+            print(f"\n  {C_BOLD}{name}{C_RESET}")
+            for g in gpus:
+                procs = g.get("processes", [])
+                if not procs:
+                    print(f"    GPU{g.get('index', 0)}: {C_GREEN}idle{C_RESET}")
+                    continue
+                # 按用户聚合
+                by_user = {}
+                for p in procs:
+                    u = p.get("user", "?")
+                    if u not in by_user:
+                        by_user[u] = {"mem_mb": 0, "count": 0, "top_proc": ""}
+                    by_user[u]["mem_mb"] += p.get("mem_mb", 0)
+                    by_user[u]["count"] += 1
+                    if p.get("mem_mb", 0) > 1000 or not by_user[u]["top_proc"]:
+                        by_user[u]["top_proc"] = p.get("name", "")[:35]
+                for u, info in sorted(by_user.items(), key=lambda x: -x[1]["mem_mb"]):
+                    user_keys = list(user_usage.keys())
+                    cidx = user_keys.index(u) if u in user_keys else 0
+                    c = colors[cidx % len(colors)]
+                    cnt = f"x{info['count']}" if info["count"] > 1 else ""
+                    print(f"    GPU{g.get('index', 0)}: {c}{u:<12}{C_RESET} "
+                          f"{info['mem_mb']/1024:>5.1f}GB {cnt:<5} {C_GREY}{info['top_proc']}{C_RESET}")
+
+    # 公平性提示
+    total_gpus = sum(len(gpus) for _, _, gpus in node_summaries)
+    if len(sorted_users) > 1:
+        fair_share = total_gpus / len(sorted_users)
+        print(f"\n{C_GREY}Fair share: {fair_share:.1f} GPUs/user "
+              f"(total {total_gpus} GPUs, {len(sorted_users)} active users){C_RESET}")
+        top_user, top_info = sorted_users[0]
+        if top_info["gpu_count"] > fair_share * 1.5:
+            print(f"{C_YELLOW}⚠ {top_user} is using {top_info['gpu_count']} GPUs "
+                  f"({top_info['gpu_count']/fair_share:.1f}x fair share){C_RESET}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cluster", description="SafeTransport Cluster CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -521,6 +632,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("info", help="查看单个任务的完整详情")
     s.add_argument("task_id")
     s.set_defaults(func=cmd_info)
+
+    # who
+    s = sub.add_parser("who", help="查看各用户的 GPU 占用情况（多人共享必备）")
+    s.add_argument("-v", "--verbose", action="store_true", help="显示每张卡的详细进程")
+    s.set_defaults(func=cmd_who)
 
     # stats
     s = sub.add_parser("stats", help="历史执行统计")

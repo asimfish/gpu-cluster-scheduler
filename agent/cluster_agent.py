@@ -229,7 +229,9 @@ class Agent:
         return True
 
     def _my_load_score(self) -> float:
-        """本节点的负载评分 (越低越好)。综合 GPU 空闲率、CPU 负载、任务数。"""
+        """本节点的负载评分 (越低越好)。
+        综合 GPU 空闲率、CPU 负载、任务数、其他用户占用。
+        多人共享时，有其他用户在用的 GPU 也算忙碌。"""
         try:
             hb = read_json(self.paths.hb_file)
             if not hb:
@@ -237,11 +239,15 @@ class Agent:
             gpus = hb.get("gpus", [])
             if not gpus:
                 return 999.0
-            busy_gpus = sum(1 for g in gpus if len(g.get("processes", [])) > 0 or g.get("util_gpu", 0) > 30)
+            busy_gpus = sum(1 for g in gpus
+                           if len(g.get("processes", [])) > 0 or g.get("util_gpu", 0) > 30)
+            total_procs = sum(len(g.get("processes", [])) for g in gpus)
             gpu_ratio = busy_gpus / len(gpus)
             cpu_ratio = hb.get("load1", 0) / max(hb.get("cpu_count", 1), 1)
             task_count = len(self.children)
-            return gpu_ratio * 40 + cpu_ratio * 30 + task_count * 10
+            # 其他用户的进程越多,分数越高(越不适合下发)
+            other_proc_penalty = min(total_procs * 0.5, 20)
+            return gpu_ratio * 40 + cpu_ratio * 30 + task_count * 10 + other_proc_penalty
         except Exception:
             return 999.0
 
@@ -361,6 +367,20 @@ class Agent:
             if a <= now_h < b:
                 return True
         return False
+
+    def _respect_other_users_gpus(self, snap: NodeSnapshot) -> int:
+        """返回'被其他用户重度使用'的 GPU 数量。
+        如果某张卡上有非本 agent 的进程且显存 > 10GB，视为被占用。"""
+        heavy_count = 0
+        for g in snap.gpus:
+            other_mem = 0
+            for proc in g.processes:
+                pid = proc.get("pid", 0)
+                if pid not in self.owned_pids:
+                    other_mem += proc.get("mem_mb", 0)
+            if other_mem > 10240:  # > 10GB
+                heavy_count += 1
+        return heavy_count
 
     def try_schedule(self, snap: NodeSnapshot):
         if self.stopping:

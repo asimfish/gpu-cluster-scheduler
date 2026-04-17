@@ -105,6 +105,41 @@ def _cluster_summary() -> Dict:
     }
 
 
+def _user_gpu_usage() -> list:
+    """按用户聚合 GPU 使用情况"""
+    cfg = load_yaml(BASE / "config.yaml")
+    hbs = _heartbeats()
+    dead_after = cfg.get("scheduler", {}).get("dead_after_sec", 60)
+    now = time.time()
+    users = {}
+
+    for name, hb in hbs.items():
+        if (now - hb.get("time", 0)) > dead_after:
+            continue
+        for g in hb.get("gpus", []):
+            for proc in g.get("processes", []):
+                user = proc.get("user", "?")
+                if user not in users:
+                    users[user] = {"user": user, "gpu_count": 0, "mem_gb": 0.0,
+                                   "procs": 0, "hosts": [], "gpus_detail": []}
+                users[user]["mem_gb"] += proc.get("mem_mb", 0) / 1024
+                users[user]["procs"] += 1
+                if name not in users[user]["hosts"]:
+                    users[user]["hosts"].append(name)
+                users[user]["gpus_detail"].append({
+                    "host": name, "gpu": g.get("index", 0),
+                    "mem_mb": proc.get("mem_mb", 0),
+                })
+    for u in users.values():
+        seen = set()
+        for gd in u["gpus_detail"]:
+            seen.add(f"{gd['host']}:{gd['gpu']}")
+        u["gpu_count"] = len(seen)
+        u["mem_gb"] = round(u["mem_gb"], 1)
+        del u["gpus_detail"]
+    return sorted(users.values(), key=lambda x: -x["mem_gb"])
+
+
 def _read_log_tail(task_id: str, lines: int = 100) -> str:
     for host_dir in (BASE / "logs").iterdir():
         if not host_dir.is_dir():
@@ -218,6 +253,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
 </div>
 <div class="stats" id="statsArea"></div>
 <div class="nodes" id="nodesArea"></div>
+<div id="usersArea" style="margin-bottom:20px;"></div>
 <div id="tasksArea"></div>
 <div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
   <div class="modal-content" id="modalContent"></div>
@@ -335,17 +371,33 @@ async function showTask(taskId) {
 }
 function closeModal() { document.getElementById('modal').style.display = 'none'; }
 
+function renderUsers(users) {
+  if (!users || !users.length) { document.getElementById('usersArea').innerHTML=''; return; }
+  let html = '<div class="tasks-section"><h2>GPU Usage by User</h2>';
+  html += '<table class="task-table"><thead><tr><th>User</th><th>GPUs</th><th>VRAM</th><th>Procs</th><th>Hosts</th></tr></thead><tbody>';
+  const colors = ['var(--cyan)','var(--green)','var(--yellow)','var(--red)','var(--accent)'];
+  users.forEach((u,i) => {
+    html += `<tr><td style="color:${colors[i%colors.length]};font-weight:600">${u.user}</td>`;
+    html += `<td>${u.gpu_count}</td><td>${u.mem_gb.toFixed(1)}GB</td>`;
+    html += `<td>${u.procs}</td><td>${(u.hosts||[]).join(', ')}</td></tr>`;
+  });
+  html += '</tbody></table></div>';
+  document.getElementById('usersArea').innerHTML = html;
+}
+
 async function loadData() {
   try {
-    const [summary, pending, running, done, failed] = await Promise.all([
+    const [summary, pending, running, done, failed, users] = await Promise.all([
       fetch('/api/summary').then(r=>r.json()),
       fetch('/api/tasks/pending').then(r=>r.json()),
       fetch('/api/tasks/running').then(r=>r.json()),
       fetch('/api/tasks/done?limit=20').then(r=>r.json()),
       fetch('/api/tasks/failed?limit=20').then(r=>r.json()),
+      fetch('/api/users').then(r=>r.json()),
     ]);
     renderStats(summary);
     renderNodes(summary.nodes);
+    renderUsers(users);
     renderTasks({pending, running, done, failed});
   } catch(e) { console.error(e); }
 }
@@ -416,6 +468,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             task_id = urllib.parse.unquote(path.split("/")[-1])
             lines = int(qs.get("lines", 100))
             self._text(_read_log_tail(task_id, lines))
+        elif path == "/api/users":
+            self._json(_user_gpu_usage())
         elif path == "/api/heartbeats":
             self._json(_heartbeats())
         else:
