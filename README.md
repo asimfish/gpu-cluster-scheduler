@@ -1,274 +1,383 @@
-# SafeTransport Cluster — 多机实验调度 & 监控
+# GPU Cluster Scheduler
 
-> 为 liyufeng 搭建的轻量级 5 机 A100 集群调度系统，只依赖 **共享盘 + SSH**，无任何中间件。
+> 轻量级多机 GPU 实验调度系统 —— 只依赖 **共享盘 + SSH**，零中间件，开箱即用。
+
+专为科研团队设计：在多台 A100 服务器上自动调度实验，安全共享 GPU 资源，避免冲突和资源浪费。
+
+---
+
+## 特性一览
+
+| 特性 | 说明 |
+|---|---|
+| **零中间件** | 不需要 Redis/RabbitMQ/数据库，只用共享文件系统 + SSH |
+| **原子调度** | `os.rename` 保证同一任务不会被多个节点抢到 |
+| **安全共享** | 严格检查 GPU 显存/利用率、CPU 负载、系统内存，绝不影响他人 |
+| **智能均衡** | 自动将任务分配到最空闲的节点 |
+| **自动重试** | 失败任务可配置自动重试次数和间隔 |
+| **DAG 工作流** | 支持多阶段级联实验（训练→评估→报告） |
+| **资源配额** | 按项目/用户限制并发数和 GPU 使用量 |
+| **通知推送** | 飞书/邮件/Webhook，任务完成或失败立即知晓 |
+| **Web 面板** | 暗色主题仪表盘，GPU 实时状态 + 任务队列一目了然 |
+| **断电恢复** | Agent 重启后自动检测并恢复/清理僵尸任务 |
+| **12 个命令** | 完善的 CLI 覆盖日常所有操作 |
+
+---
 
 ## 目录结构
 
 ```
 /home/dataset-assist-0/cluster-liyufeng/
-├── config.yaml              # 集群节点 + 安全策略
+├── README.md                  ← 本文档
+├── config.yaml                ← 集群配置（节点 + 安全策略 + 通知 + 配额）
 ├── agent/
-│   ├── cluster_agent.py     # 每台机器上跑的 daemon
-│   ├── cluster_cli.py       # 提交/查询/杀任务
-│   ├── multitop.py          # 多机实时面板
-│   └── gpu_utils.py
-├── bin/                     # 一键命令(chmod +x)
-│   ├── cluster              # = python agent/cluster_cli.py
-│   ├── multitop             # = python agent/multitop.py
-│   ├── agent-start <host>
-│   ├── agent-stop <host>
-│   ├── agent-status
-│   └── cluster-bootstrap    # SSH 到所有节点一键拉起 agent
-├── envs/safetransport/      # uv 装的 Python 3.10 环境（共享）
-├── projects/                # 项目代码（共享，所有机器读同一份）
-│   └── SafeTransport/
-├── heartbeat/<host>.json    # agent 每 10s 写一次
+│   ├── cluster_agent.py       ← 节点守护进程（心跳 + 调度 + 监控）
+│   ├── cluster_cli.py         ← 命令行工具（12 个子命令）
+│   ├── gpu_utils.py           ← GPU / 系统状态采集
+│   ├── multitop.py            ← 多机实时 GPU 面板
+│   ├── notifier.py            ← 通知模块（飞书/邮件/Webhook）
+│   ├── sync_hub.py            ← 跨节点文件同步（无共享盘场景）
+│   └── web_dashboard.py       ← Web 可视化仪表盘
+├── bin/                       ← 可执行命令（加入 PATH 即可全局使用）
+│   ├── cluster                ← 主命令入口
+│   ├── multitop               ← 多机 GPU 面板
+│   ├── agent-start            ← 启动本机 agent
+│   ├── agent-stop             ← 停止本机 agent
+│   ├── agent-status           ← 查看 agent 状态
+│   ├── cluster-bootstrap      ← SSH 一键拉起所有节点 agent
+│   ├── cluster-bootstrap-remote ← 部署到无共享盘的节点
+│   ├── dashboard-start        ← 启动 Web 仪表盘
+│   ├── dashboard-stop         ← 停止 Web 仪表盘
+│   ├── sync-hub-start         ← 启动同步服务
+│   └── sync-hub-stop          ← 停止同步服务
+├── envs/safetransport/        ← Python 3.10 环境（共享盘上，所有节点复用）
+├── projects/SafeTransport/    ← 项目代码（共享）
+├── examples/                  ← 使用示例
+│   ├── batch.yaml             ← 批量提交示例
+│   ├── dag_example.yaml       ← DAG 工作流示例
+│   └── sanity_check.yaml      ← 功能验证示例
+├── heartbeat/<host>.json      ← 每 10 秒更新的节点心跳
 ├── tasks/
-│   ├── pending/             # 用户提交的任务
-│   ├── claimed/             # 某 agent 已抢占、准备启动
-│   ├── running/             # 正在跑（含 host/gpu/pid）
-│   ├── done/                # rc=0
-│   └── failed/
+│   ├── pending/               ← 待调度任务
+│   ├── claimed/               ← 已被抢占、准备启动
+│   ├── running/               ← 正在运行（含 host/gpu/pid）
+│   ├── done/                  ← 成功完成（rc=0）
+│   └── failed/                ← 失败
 ├── logs/
-│   ├── <host>/<task_id>.log # 每个任务的完整 stdout/stderr
-│   └── _agent/<host>.log    # agent 自己的日志
-└── agent_state/<host>/owned_pids.json  # agent 启动过的 pid（用来安全 kill）
+│   ├── <host>/<task_id>.log   ← 任务完整 stdout/stderr
+│   └── _agent/<host>.log      ← agent 自身日志
+├── agent_state/<host>/        ← agent 持久化状态
+└── doc/
+    ├── ARCHITECTURE.md        ← 架构设计文档
+    └── CHANGELOG.md           ← 版本变更日志
 ```
 
-## 一、安装 / 首次部署
+---
 
-### 1.1 共享盘上的准备
+## 快速开始
 
-项目代码和 Python 环境都在 `/home/dataset-assist-0/cluster-liyufeng/`，
-**所有节点挂的是同一个共享盘，因此不用各机器重复安装**。
-
-```bash
-# 本机已经自动做过了:
-# 1. rsync SafeTransport -> projects/SafeTransport
-# 2. uv sync --frozen --python 3.10 -> envs/safetransport
-```
-
-### 1.2 SSH 免密
-
-```bash
-# 在 *每台* 要参加集群的机器上,确保 ~/.ssh/config 能免密登录其他机器
-# (当前环境下已经配好了: main / lotus-1 / lotus-2 / pub-1 / pub-2)
-ssh main hostname   # 如果能打印 hostname 则 OK
-```
-
-### 1.3 把 bin/ 加入 PATH（可选，让命令全局可用）
+### 1. 添加 PATH
 
 ```bash
 echo 'export PATH="/home/dataset-assist-0/cluster-liyufeng/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-## 二、启动 agent
-
-### 2.1 单机启动
+### 2. 启动 Agent
 
 ```bash
-# 在 main 节点上:
-CLUSTER_HOST=main agent-start main
-# 等价:
-bash /home/dataset-assist-0/cluster-liyufeng/bin/agent-start main
+# 在当前机器启动
+agent-start pub-1
 
-# 查看本机 agent 日志:
-tail -f /home/dataset-assist-0/cluster-liyufeng/logs/_agent/main.log
-```
-
-### 2.2 一键给所有节点拉起 agent
-
-```bash
-# 从当前机器通过 SSH 分发启动命令
+# 或一键启动所有节点
 cluster-bootstrap
-# 或者只拉某几台:
-cluster-bootstrap main lotus-1
+
+# 查看 agent 状态
+agent-status
 ```
 
-### 2.3 停止 agent（优雅）
+### 3. 提交实验
 
 ```bash
-agent-stop main     # 发 SIGTERM, agent 等自己的子任务跑完再退出
+# 最简单的用法
+cluster submit -c "python train.py --seed 0"
+
+# 完整参数
+cluster submit \
+    -c "python experiments/run_safeflow_v2.py --seed 42" \
+    --tag safeflow_s42 \
+    --gpu 1 \
+    --gpu-mem 40 \
+    --priority 7 \
+    --timeout-h 12 \
+    --max-retries 2 \
+    --retry-delay 60 \
+    --prefer main \
+    --note "safeflow experiment seed 42"
 ```
 
-## 三、日常使用
-
-### 3.1 查看集群实时状态（两种视图）
+### 4. 查看状态
 
 ```bash
-# 视图 1: 精简概览(心跳汇总)
-cluster status          # 一次打印
-cluster status -v       # 含每张 GPU
-
-# 视图 2: 类 nvitop 多机彩色面板(每秒刷新)
-multitop
-multitop --ssh          # 不靠 agent 心跳, SSH 实时查
-multitop --nodes main lotus-1
+cluster status           # 集群概览
+cluster status -v        # 含每张 GPU 详情
+multitop                 # 实时多机 GPU 面板（类 nvitop）
+multitop --ssh           # SSH 直连模式（不依赖 agent 心跳）
 ```
 
-### 3.2 提交实验
+---
+
+## 命令参考
+
+### `cluster submit` — 提交任务
 
 ```bash
-# 单个任务
-cluster submit -c "python experiments/run_safeflow_v2.py --seed 0" \
-    --tag safeflow_seed0 --gpu 1 --gpu-mem 40
+cluster submit -c <command> [options]
+```
 
-# 指定只在某些节点上跑
-cluster submit -c "..." --prefer main --prefer lotus-1
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `-c, --cmd` | **必填** | 要执行的 shell 命令 |
+| `-p, --project` | SafeTransport | 项目名 |
+| `--cwd` | 自动推断 | 工作目录 |
+| `--tag` | - | 任务标签（出现在 task_id 中） |
+| `--gpu` | 1 | 需要的 GPU 数量 |
+| `--gpu-mem` | 40 | 每张 GPU 最低需要的显存 (GB) |
+| `--priority` | 5 | 优先级（越大越先，1-10） |
+| `--prefer` | - | 优先运行的节点（可多次指定） |
+| `--exclude` | - | 排除的节点（可多次指定） |
+| `--timeout-h` | 24 | 超时小时数 |
+| `--max-retries` | 0 | 失败后最大重试次数 |
+| `--retry-delay` | 30 | 重试间隔秒数 |
+| `--depends-on` | - | 前置依赖的任务 ID（可多次指定） |
+| `--env` | - | 环境变量 `KEY=VAL`（可多次指定） |
+| `--note` | - | 备注 |
 
-# 低优先级(默认 5, 越大越先)
-cluster submit -c "..." --priority 2
+**示例：**
 
-# 批量从 yaml 提交:
+```bash
+# 指定在 main 或 lotus-1 上跑
+cluster submit -c "python train.py" --prefer main --prefer lotus-1
+
+# 失败自动重试 3 次，每次间隔 1 分钟
+cluster submit -c "python train.py" --max-retries 3 --retry-delay 60
+
+# 需要 2 张 GPU，每张至少 60GB 显存
+cluster submit -c "torchrun --nproc_per_node=2 train.py" --gpu 2 --gpu-mem 60
+
+# 依赖前一个任务完成后再跑
+cluster submit -c "python eval.py" --depends-on 20260418_train_seed0_xxxx
+```
+
+### `cluster submit-batch` — 批量提交
+
+```bash
 cluster submit-batch examples/batch.yaml
 ```
 
-### 3.3 查看日志
-
-```bash
-cluster ls pending
-cluster ls running
-cluster ls done -n 5
-
-cluster log <task-id>          # 打印最后 80 行
-cluster log <task-id> -f       # 实时 tail
-```
-
-### 3.4 杀任务（安全）
-
-```bash
-cluster kill <task-id>
-```
-> 只会 kill **agent 自己启动的进程组**（owned_pids.json 白名单），
-> 绝不动其他用户的进程。
-
-### 3.5 清理历史
-
-```bash
-cluster clean --stages done failed --older-than-hours 168
-cluster prune-logs --older-than-hours 720
-```
-
-## 四、安全策略（`config.yaml` 中 `safety:`）
-
-这台服务器很多人在用，所以 agent 下发前**一定**会检查：
-
-| 约束 | 默认 | 说明 |
-|---|---|---|
-| `gpu_free_mem_gb_min` | 40 GB | 该卡剩余显存不够就跳过 |
-| `gpu_util_max_percent` | 30% | 该卡 util 高就跳过 |
-| `node_cpu_load_ratio_max` | 0.85 | load1/cpu > 85% 整机暂停下发 |
-| `node_mem_free_gb_min` | 32 GB | 系统内存太紧就跳过 |
-| `max_tasks_per_node` | 6 | 单机并发上限 |
-| `max_global_tasks` | 30 | 我所有节点合计上限 |
-| `idle_confirm_rounds` | 2 | 连续 2 轮都空闲才下发（防抖） |
-| `kill_only_owned` | true | 只杀自己启动的 pid |
-
-## 五、任务 JSON 字段
-
-`tasks/pending/<task_id>.json`:
-
-```jsonc
-{
-  "task_id": "20260417-163000_SafeTransport_safeflow_seed0_abcd",
-  "project": "SafeTransport",
-  "cwd": "/home/dataset-assist-0/cluster-liyufeng/projects/SafeTransport",
-  "cmd": "python experiments/run_safeflow_v2.py --seed 0",
-  "env": {"WANDB_MODE": "offline"},
-  "gpu_count": 1,
-  "gpu_mem_gb": 40,
-  "priority": 5,
-  "prefer_hosts": [],
-  "exclude_hosts": [],
-  "timeout_h": 24,
-  "submit_by": "liyufeng",
-  "submit_time": "2026-04-17 16:30:00"
-}
-```
-
-CLI 会自动注入 `CUDA_VISIBLE_DEVICES`、`CLUSTER_TASK_ID`、`CLUSTER_HOST`。
-
-## 六、重启恢复
-
-**所有代码、环境、任务状态都在共享盘**，任何机器重启后：
-
-```bash
-# 重新拉起本机 agent 即可,之前的 running 任务需要看是否还活(因为重启会丢进程)
-agent-start <host>
-
-# running/ 下遗留的 "僵尸" 任务,手动移回 pending/ 或 failed/
-cluster ls running   # 看有没有 host==<本机> 且 pid 已死的
-```
-
-(后续可加 `agent_recover`，先手动处理。)
-
-## 七、原子操作保证
-
-两台机器不会抢到同一个 task，因为：
-
-```python
-os.rename(pending/<id>.json, claimed/<host>__<id>.json)
-```
-
-`os.rename` 在同一 mount point 上是原子的：第二个 agent 会得到 `FileNotFoundError`，自动跳过。
-
-
-## 八、新功能：任务重试
-
-### 8.1 自动重试（提交时指定）
-
-```bash
-cluster submit -c "python train.py --seed 0" --max-retries 3 --retry-delay 60
-```
-
-失败后自动重回 pending，最多重试 3 次，每次间隔 60 秒。
-
-### 8.2 手动重试
-
-```bash
-cluster retry <task-id>                     # 重试一个 failed 任务
-cluster retry <task-id> --reset-retries     # 重置重试计数
-cluster retry <task-id> --max-retries 5     # 同时更新最大重试次数
-```
-
-### 8.3 batch.yaml 支持
+YAML 格式：
 
 ```yaml
 common:
-  max_retries: 2
-  retry_delay_sec: 30
+  project: SafeTransport
+  gpu: 1
+  gpu_mem: 40
+  timeout_h: 8
+  max_retries: 1
+
 tasks:
-  - tag: exp1
-    cmd: python train.py
+  - tag: seed0
+    cmd: python train.py --seed 0
+  - tag: seed1
+    cmd: python train.py --seed 1
+  - tag: seed2
+    cmd: python train.py --seed 2
 ```
 
-## 九、Agent 恢复机制
+### `cluster submit-dag` — DAG 工作流
 
-Agent 重启后自动扫描 `tasks/running/` 中属于本机的任务：
+```bash
+cluster submit-dag examples/dag_example.yaml
+```
 
-- **进程还活着** → 重新跟踪（通过 `/proc/<pid>` 轮询）
-- **进程已死** → 标记 failed
-- 可在 config.yaml 中设置 `auto_requeue_on_recover: true`，让僵尸任务自动重回 pending
+```yaml
+stages:
+  - name: train
+    tasks:
+      - tag: s0
+        cmd: python train.py --seed 0
+      - tag: s1
+        cmd: python train.py --seed 1
+
+  - name: eval
+    # 自动依赖上一 stage 的所有任务
+    tasks:
+      - tag: eval_all
+        cmd: python eval.py --seeds 0,1
+
+  - name: report
+    tasks:
+      - tag: report
+        cmd: python gen_report.py
+        gpu: 0
+```
+
+### `cluster status` — 集群概览
+
+```bash
+cluster status       # 简洁模式
+cluster status -v    # 显示每张 GPU
+```
+
+### `cluster ls` — 列出任务
+
+```bash
+cluster ls pending           # 待调度
+cluster ls running           # 正在运行
+cluster ls done              # 已完成
+cluster ls failed            # 已失败
+cluster ls done -n 10        # 只看最近 10 条
+```
+
+### `cluster info` — 任务详情
+
+```bash
+cluster info <task_id>       # 查看完整信息
+cluster info safeflow_s42    # 支持模糊匹配
+```
+
+### `cluster log` — 查看日志
+
+```bash
+cluster log <task_id>        # 打印最后 80 行
+cluster log <task_id> -f     # 实时 tail（类似 tail -f）
+cluster log <task_id> -n 200 # 打印最后 200 行
+```
+
+### `cluster kill` — 杀任务
+
+```bash
+cluster kill <task_id>
+```
+
+> 安全机制：只会 kill agent 自己启动的进程组（通过 owned_pids.json 白名单），绝不影响其他用户。
+
+### `cluster retry` — 重试失败任务
+
+```bash
+cluster retry <task_id>                 # 重新入队
+cluster retry <task_id> --reset-retries # 重置重试计数
+cluster retry <task_id> --max-retries 5 # 同时更新最大重试次数
+```
+
+### `cluster stats` — 执行统计
+
+```bash
+cluster stats              # 最近 7 天统计
+cluster stats --hours 720  # 最近 30 天
+```
+
+输出包括：成功/失败数、平均/最大运行时间、GPU 时长、按节点/项目分组统计。
+
+### `cluster clean` — 清理历史
+
+```bash
+cluster clean                              # 清理 7 天前的 done/failed
+cluster clean --stages done --older-than-hours 48
+```
+
+### `cluster prune-logs` — 清理旧日志
+
+```bash
+cluster prune-logs --older-than-hours 720  # 清理 30 天前的日志
+```
+
+---
+
+## 多机实时面板 (multitop)
+
+```bash
+multitop                    # 读心跳数据（最快）
+multitop --ssh              # SSH 直连查询（不需要 agent）
+multitop --nodes main pub-1 # 只看指定节点
+multitop --interval 2       # 2 秒刷新
+multitop --once --no-clear  # 只打印一次（便于管道/截图）
+```
+
+显示内容：每个节点的 CPU 负载、内存、8 张 GPU 的利用率/显存/温度/功耗，以及正在跑的任务。
+
+---
+
+## Web 仪表盘
+
+```bash
+dashboard-start 8765        # 启动，端口默认 8765
+dashboard-stop              # 停止
+```
+
+浏览器打开 `http://<服务器IP>:8765`，功能包括：
+
+- **集群概览卡片**：节点数、GPU 总量、空闲 GPU、总可用显存
+- **节点详情**：每张 GPU 的利用率、显存条、温度
+- **任务队列**：pending / running / done / failed 分段展示
+- **任务详情弹窗**：点击任务 ID 查看全部字段 + 实时日志
+- **自动刷新**：5s / 10s / 30s 可调
+- **API 接口**：所有数据可通过 REST API 获取
+
+### API 接口
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/summary` | GET | 集群概览 JSON |
+| `/api/tasks/<stage>` | GET | 某阶段任务列表 |
+| `/api/task/<task_id>` | GET | 单任务详情 |
+| `/api/log/<task_id>?lines=100` | GET | 任务日志尾部 |
+| `/api/heartbeats` | GET | 所有节点心跳 |
+| `/api/kill` | POST | 杀任务 `{"task_id":"xxx"}` |
+
+---
+
+## 配置说明 (config.yaml)
+
+### 节点配置
+
+```yaml
+nodes:
+  - name: pub-1          # 节点名（内部标识）
+    ssh: pub-1            # SSH host（~/.ssh/config 中的名字）
+    total_gpus: 8
+    enabled: true
+    tags: [a100-80g]
+    hostname_hints:       # 自动识别本机用
+      - ide-650ef93f
+```
+
+### 安全策略
 
 ```yaml
 safety:
-  auto_requeue_on_recover: true
+  gpu_free_mem_gb_min: 40     # 该卡剩余显存 < 40GB 则跳过
+  gpu_util_max_percent: 30    # 该卡利用率 > 30% 则跳过
+  node_cpu_load_ratio_max: 0.85  # CPU 负载率 > 85% 暂停下发
+  node_mem_free_gb_min: 32    # 系统可用内存 < 32GB 跳过
+  max_tasks_per_node: 6       # 单机并发上限
+  max_global_tasks: 30        # 全集群并发上限
+  kill_only_owned: true       # 只杀自己启动的进程
+  auto_requeue_on_recover: false  # agent 重启后是否自动重跑僵尸任务
 ```
 
-## 十、智能负载均衡
+### 调度参数
 
-当 `prefer_hosts` 为空时，agent 会读取所有节点心跳，计算负载评分（GPU 空闲率 × 40 + CPU 负载 × 30 + 任务数 × 10），只有自己是最轻负载时才抢任务。
+```yaml
+scheduler:
+  heartbeat_interval_sec: 10  # 心跳写入间隔
+  claim_interval_sec: 5       # 扫描 pending 间隔
+  dead_after_sec: 60          # 心跳超过此时间判定为死亡
+  idle_confirm_rounds: 2      # 连续 N 轮空闲才下发（防抖）
+  default_timeout_h: 24       # 默认超时小时数
+```
 
-效果：任务自动分散到最空闲的节点，避免扎堆。
-
-## 十一、通知机制
-
-支持飞书 Webhook、邮件 SMTP、自定义 Webhook 三种通知方式。
-
-### 配置
-
-在 `config.yaml` 中：
+### 通知配置
 
 ```yaml
 notify:
@@ -281,98 +390,119 @@ notify:
   email:
     smtp_host: "smtp.163.com"
     smtp_port: 465
-    smtp_user: "your@163.com"
-    smtp_pass: "your-pass"
-    to: ["target@example.com"]
+    smtp_user: "${CLUSTER_SMTP_USER}"    # 支持环境变量引用
+    smtp_pass: "${CLUSTER_SMTP_PASS}"
+    to: ["your@email.com"]
     use_ssl: true
 ```
 
-## 十二、任务依赖 / DAG 工作流
-
-### 12.1 单任务依赖
-
-```bash
-cluster submit -c "python eval.py" --depends-on train_task_id_1 --depends-on train_task_id_2
-```
-
-任务不会启动，直到所有依赖都出现在 `tasks/done/` 中。
-
-### 12.2 DAG 工作流
-
-```bash
-cluster submit-dag examples/dag_example.yaml
-```
-
-YAML 格式：
-
-```yaml
-stages:
-  - name: train
-    tasks:
-      - tag: seed0
-        cmd: python train.py --seed 0
-      - tag: seed1
-        cmd: python train.py --seed 1
-  - name: eval
-    # 自动依赖上一个 stage 的所有任务
-    tasks:
-      - tag: eval_all
-        cmd: python eval.py --all
-  - name: report
-    tasks:
-      - tag: gen_report
-        cmd: python gen_report.py
-```
-
-## 十三、资源配额
-
-在 `config.yaml` 中设置按项目/用户限制：
+### 资源配额
 
 ```yaml
 quotas:
   per_project:
     SafeTransport:
-      max_running: 20
-      max_gpus: 32
+      max_running: 20    # 该项目最多同时跑 20 个任务
+      max_gpus: 32       # 该项目最多占 32 张 GPU
   per_user:
     liyufeng:
       max_running: 25
       max_gpus: 36
 ```
 
-超出配额的任务会在 pending 中等待，直到资源释放。
+---
 
-## 十四、Web 仪表盘
+## 任务生命周期
 
-### 启动
-
-```bash
-dashboard-start 8765
-# 浏览器打开: http://<ip>:8765
+```
+用户提交
+    │
+    ▼
+ pending/     用户 submit → 写入 JSON
+    │
+    ▼ (agent 原子 rename 抢占)
+ claimed/     某个 agent 锁定
+    │
+    ▼ (启动子进程)
+ running/     正在执行，含 host/gpu/pid
+    │
+    ├──► done/     rc=0，成功
+    │
+    └──► failed/   rc≠0
+            │
+            ├──► pending/ (若 retry_count < max_retries，自动重回队列)
+            │
+            └──► 最终失败 (retries exhausted)
 ```
 
-### 停止
+---
 
-```bash
-dashboard-stop
+## Agent 恢复机制
+
+当节点重启或 agent 异常退出后：
+
+1. 重新启动 agent (`agent-start <host>`)
+2. Agent 自动扫描 `tasks/running/` 中属于本机的任务
+3. 检查每个 PID 是否还活着：
+   - **还活着** → 重新跟踪（通过 `/proc/<pid>` 轮询）
+   - **已死亡** → 标记 failed，或自动重回 pending（需配置 `auto_requeue_on_recover: true`）
+
+---
+
+## 原子操作保证
+
+两台机器不会抢到同一个 task：
+
+```python
+os.rename(pending/<id>.json, claimed/<host>__<id>.json)
 ```
 
-### 功能
+`os.rename` 在同一 mount point 上是原子的。第二个 agent 会得到 `FileNotFoundError`，自动跳过。
 
-- 集群概览卡片（节点数、GPU 总量、空闲 GPU、显存）
-- 每个节点的 GPU 实时状态（利用率、显存、温度）
-- 任务队列（pending/running/done/failed）
-- 点击任务 ID 查看详情和实时日志
-- 通过 API 杀任务
-- 5 秒自动刷新（可调节）
+---
 
-### API
+## 智能负载均衡
 
-| 端点 | 方法 | 说明 |
-|---|---|---|
-| `/api/summary` | GET | 集群概览 |
-| `/api/tasks/<stage>` | GET | 某阶段的任务列表 |
-| `/api/task/<task_id>` | GET | 单任务详情 |
-| `/api/log/<task_id>?lines=100` | GET | 任务日志尾部 |
-| `/api/heartbeats` | GET | 所有节点心跳 |
-| `/api/kill` | POST | 杀任务 `{"task_id":"xxx"}` |
+当 `prefer_hosts` 为空时，每个 agent 会：
+
+1. 读取所有节点的心跳文件
+2. 计算负载评分 = GPU 占用率 × 40 + CPU 负载率 × 30 + 任务数 × 10
+3. 只有自己是最轻负载（或接近最轻）时才抢任务
+4. 内置 5 分容差，避免频繁切换
+
+效果：任务自动分散到最空闲的节点。
+
+---
+
+## 跨节点部署（无共享盘场景）
+
+如果节点间没有共享存储：
+
+```bash
+# 1. 部署到所有远程节点（rsync 代码 + 安装环境 + 启动 agent）
+cluster-bootstrap-remote
+
+# 2. 在中心节点启动同步服务
+sync-hub-start
+```
+
+sync_hub 会周期性地：
+- **PUSH** 到各节点：config + agent 代码 + pending 任务
+- **PULL** 回中心：heartbeat + running/done/failed 任务 + 日志
+
+---
+
+## 依赖要求
+
+- Python 3.8+（推荐 3.10）
+- pyyaml（`pip install pyyaml`）
+- SSH 免密配置
+- nvidia-smi（GPU 状态采集）
+
+无其他外部依赖，所有核心功能仅使用 Python 标准库。
+
+---
+
+## License
+
+MIT
