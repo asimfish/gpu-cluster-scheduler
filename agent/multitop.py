@@ -91,9 +91,15 @@ def gpu_line(g: Dict, compact: bool) -> str:
 
 
 def node_block(host: str, snap: Dict, stale_sec: float) -> str:
-    age = time.time() - snap.get("time", 0)
+    snap_time = snap.get("time", 0)
+    if snap_time == 0:
+        return grey(f"[{host}] no heartbeat")
+    age = time.time() - snap_time
     if age > stale_sec:
-        head = red(f"[{host}] STALE {int(age)}s ago")
+        if age > 86400:
+            head = red(f"[{host}] OFFLINE (last seen {int(age/3600)}h ago)")
+        else:
+            head = red(f"[{host}] STALE {int(age)}s ago")
         return head
     load1 = snap.get("load1", 0)
     ncpu = snap.get("cpu_count", 1)

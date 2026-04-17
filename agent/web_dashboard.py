@@ -30,6 +30,11 @@ from cluster_agent import load_yaml, read_json, atomic_write_json
 BASE = Path(os.environ.get("CLUSTER_BASE", "/home/dataset-assist-0/cluster-liyufeng"))
 
 
+def _set_base(path):
+    global BASE
+    BASE = path
+
+
 def _tasks_in(stage: str, limit: int = 200) -> List[Dict]:
     d = BASE / "tasks" / stage
     items = sorted(d.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -454,8 +459,7 @@ def main():
     ap.add_argument("--base", default=str(BASE))
     args = ap.parse_args()
 
-    global BASE
-    BASE = Path(args.base)
+    _set_base(Path(args.base))
 
     server = http.server.HTTPServer((args.host, args.port), DashboardHandler)
     print(f"Dashboard: http://{args.host}:{args.port}")

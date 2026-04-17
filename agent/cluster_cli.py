@@ -207,7 +207,7 @@ def cmd_ls(args):
         tid = r.get("task_id", p.stem)
         host = r.get("host", "-")
         pri = r.get("priority", "-")
-        cmd = r.get("cmd", "")
+        cmd = r.get("cmd", "").replace("\n", " ").strip()
         if args.stage == "running":
             elapsed = time.time() - r.get("start_time", time.time())
             meta = f"{host} gpu={r.get('gpu_ids')} {_fmt_eta(elapsed)}"
@@ -221,7 +221,9 @@ def cmd_ls(args):
             mr_val = r.get("max_retries", 0)
             if rc_val > 0 or mr_val > 0:
                 retry_info = f" retry={rc_val}/{mr_val}"
-            meta = f"pri={pri}{retry_info}"
+            deps = r.get("depends_on", [])
+            dep_info = f" deps={len(deps)}" if deps else ""
+            meta = f"pri={pri}{retry_info}{dep_info}"
         print(f"{tid:<45} [{meta}]  {cmd[:60]}")
 
 
@@ -348,6 +350,8 @@ def cmd_info(args):
         val = d.get(key)
         if val is None or val == "" or val == [] or val == {}:
             continue
+        if key == "cmd" and isinstance(val, str):
+            val = val.replace("\n", " ").strip()[:100]
         if key == "elapsed_sec":
             val = _fmt_eta(val)
         if key == "start_time" or key == "end_time":
