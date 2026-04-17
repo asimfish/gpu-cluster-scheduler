@@ -20,7 +20,7 @@
 | **通知推送** | 飞书/邮件/Webhook，任务完成或失败立即知晓 |
 | **Web 面板** | 暗色主题仪表盘，GPU 实时状态 + 任务队列一目了然 |
 | **断电恢复** | Agent 重启后自动检测并恢复/清理僵尸任务 |
-| **12 个命令** | 完善的 CLI 覆盖日常所有操作 |
+| **13 个命令** | 完善的 CLI 覆盖日常所有操作 |
 
 ---
 
@@ -294,6 +294,47 @@ cluster prune-logs --older-than-hours 720  # 清理 30 天前的日志
 
 ---
 
+
+
+## 多人共享场景
+
+### `cluster who` — 查看谁在用 GPU
+
+```bash
+cluster who              # 汇总视图：每个用户的 GPU 数、显存、进程数
+cluster who -v           # 详细视图：每台机器每张 GPU 的用户分布
+```
+
+输出示例：
+
+```
+== GPU Usage by User ==  (across all live nodes)
+
+USER            GPUs   VRAM       PROCS   HOSTS
+─────────────────────────────────────────────────────────────────
+alice           3       180.5GB   6       main, lotus-1
+bob             2        95.2GB   4       pub-1
+charlie         1        40.0GB   1       lotus-2
+
+Fair share: 2.0 GPUs/user (total 8 GPUs, 4 active users)
+⚠ alice is using 3 GPUs (1.5x fair share)
+```
+
+### 公平调度
+
+在多人共享时，调度器会：
+
+1. **感知其他用户**：计算负载评分时，其他用户的 GPU 进程数量作为惩罚项
+2. **避免争抢**：如果某张 GPU 上有非本集群进程且占用 > 10GB 显存，优先选择其他空闲 GPU
+3. **公平提示**：`cluster who` 自动计算公平份额，当某用户超过 1.5 倍时给出警告
+
+### Web 仪表盘用户视图
+
+仪表盘新增 "GPU Usage by User" 表格，通过 `/api/users` 获取数据。
+
+
+---
+
 ## 多机实时面板 (multitop)
 
 ```bash
@@ -333,6 +374,7 @@ dashboard-stop              # 停止
 | `/api/task/<task_id>` | GET | 单任务详情 |
 | `/api/log/<task_id>?lines=100` | GET | 任务日志尾部 |
 | `/api/heartbeats` | GET | 所有节点心跳 |
+| `/api/users` | GET | 各用户 GPU 使用情况 |
 | `/api/kill` | POST | 杀任务 `{"task_id":"xxx"}` |
 
 ---

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.0 (2026-04-18)
+
+### Multi-User Support
+
+- **`cluster who`**: 查看全集群每个用户的 GPU 占用情况（汇总 + 详细模式）
+- **公平调度**: 调度器考虑其他用户的 GPU 进程数，避免资源独占
+- **Web Dashboard**: 新增 "GPU Usage by User" 视图 + `/api/users` 端点
+- **公平份额提示**: 自动计算并警告超出公平份额的用户
+
+### Testing
+
+- 31 项自动化测试全部通过（语法 + CLI + API + 流程）
+
 ## v1.2.0 (2026-04-18)
 
 ### Polish & Testing
