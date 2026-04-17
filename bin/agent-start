@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# 在本机启动 cluster_agent (后台 nohup, 日志写共享盘)
+set -e
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+PY="$BASE/envs/safetransport/bin/python"
+HOST="${CLUSTER_HOST:-$1}"
+if [ -z "$HOST" ]; then
+    echo "usage: agent-start <host-name-in-config.yaml>"
+    echo "example: agent-start main"
+    exit 1
+fi
+LOG_DIR="$BASE/logs/_agent"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/$HOST.log"
+PIDFILE="$LOG_DIR/$HOST.pid"
+
+# 防止重复起
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "agent on $HOST already running pid=$(cat "$PIDFILE")"
+    exit 0
+fi
+
+nohup "$PY" "$BASE/agent/cluster_agent.py" --base "$BASE" --host "$HOST" \
+    >> "$LOG" 2>&1 &
+echo $! > "$PIDFILE"
+sleep 1
+echo "started agent on $HOST pid=$(cat "$PIDFILE") log=$LOG"

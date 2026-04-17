@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+for f in "$BASE/logs/_agent"/*.pid; do
+    [ -f "$f" ] || continue
+    h=$(basename "$f" .pid)
+    pid=$(cat "$f")
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "[alive] $h pid=$pid"
+    else
+        echo "[dead]  $h pid=$pid (stale pidfile)"
+    fi
+done

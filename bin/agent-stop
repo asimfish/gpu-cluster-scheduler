@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# 优雅停止本机 agent (agent 会等自己的子任务跑完再退出)
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+HOST="${CLUSTER_HOST:-$1}"
+if [ -z "$HOST" ]; then
+    echo "usage: agent-stop <host>"
+    exit 1
+fi
+PIDFILE="$BASE/logs/_agent/$HOST.pid"
+if [ ! -f "$PIDFILE" ]; then
+    echo "no pidfile for $HOST"
+    exit 1
+fi
+PID=$(cat "$PIDFILE")
+if kill -0 "$PID" 2>/dev/null; then
+    kill -TERM "$PID"
+    echo "sent SIGTERM to agent on $HOST (pid=$PID)"
+else
+    echo "agent not running (pid=$PID dead)"
+fi
+rm -f "$PIDFILE"

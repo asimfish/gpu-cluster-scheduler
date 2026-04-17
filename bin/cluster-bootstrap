@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# 一次性给所有配置里的节点: 通过 SSH 拉起 agent
+# 用法: cluster-bootstrap [node1 node2 ...]  (不加参数 = 所有 enabled)
+set -e
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+
+# 解析 config.yaml 里所有 enabled 的 node name (用共享盘的 python)
+PY="$BASE/envs/safetransport/bin/python"
+if [ "$#" -gt 0 ]; then
+    NODES="$@"
+else
+    NODES=$("$PY" -c "
+import yaml
+c = yaml.safe_load(open('$BASE/config.yaml').read())
+print(' '.join(n['name'] for n in c['nodes'] if n.get('enabled', True)))
+")
+fi
+
+echo "[bootstrap] target nodes: $NODES"
+
+for n in $NODES; do
+    echo ""
+    echo "=== $n ==="
+    # 先取对应 SSH host
+    SSH_HOST=$("$PY" -c "
+import yaml
+c = yaml.safe_load(open('$BASE/config.yaml').read())
+for x in c['nodes']:
+    if x['name']=='$n':
+        print(x.get('ssh', x['name']))
+        break
+")
+    if [ -z "$SSH_HOST" ]; then
+        echo "SKIP: unknown node $n"; continue
+    fi
+    # 用 SSH 拉起
+    ssh -o BatchMode=yes -o ConnectTimeout=5 "$SSH_HOST" \
+        "bash -lc 'CLUSTER_HOST=$n $BASE/bin/agent-start $n'" \
+        || echo "FAIL to start on $n"
+done
+
+echo ""
+echo "[done] 查看状态: $BASE/bin/cluster status"

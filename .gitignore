@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Environments
+envs/
+.venv/
+venv/
+
+# Project data (runtime)
+projects/
+heartbeat/
+tasks/
+logs/
+agent_state/
+
+# Sensitive
+*.env
+.env.*
+credentials*
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db

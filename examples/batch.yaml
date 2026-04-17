@@ -1,0 +1,24 @@
+# ==============================================
+# 批量提交示例
+# 用法: cluster submit-batch examples/batch.yaml
+# ==============================================
+common:
+  project: SafeTransport
+  cwd: /home/dataset-assist-0/cluster-liyufeng/projects/SafeTransport
+  gpu: 1
+  gpu_mem: 40
+  priority: 5
+  timeout_h: 8
+  env:
+    WANDB_MODE: offline
+
+tasks:
+  - tag: safeflow_seed0
+    cmd: python experiments/run_safeflow_v2.py --seed 0
+  - tag: safeflow_seed1
+    cmd: python experiments/run_safeflow_v2.py --seed 1
+  - tag: safeflow_seed2
+    cmd: python experiments/run_safeflow_v2.py --seed 2
+  - tag: multi_seed0
+    cmd: python experiments/run_multi_constraint.py --seed 0
+    prefer_hosts: [main, lotus-1]

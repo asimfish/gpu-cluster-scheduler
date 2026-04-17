@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# ============================================================
+# cluster-bootstrap-remote
+# ============================================================
+# 在各节点本地盘 /home/dataset-local/cluster-liyufeng/ 做部署:
+# 1. 创建目录
+# 2. rsync 代码 + config + bin
+# 3. 装 uv + 同步 uv 环境 (用 project pyproject.toml)
+#    - uv 下载到远端: 用 pip + 本地 python 引导, 或通过 SSH 读取脚本
+# 4. 启动 agent
+# ============================================================
+set -e
+
+HUB_BASE="${CLUSTER_HUB_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+REMOTE_BASE="${CLUSTER_REMOTE_BASE:-/home/dataset-local/cluster-liyufeng}"
+PY="$HUB_BASE/envs/safetransport/bin/python"
+
+# 哪些节点要部署
+if [ "$#" -gt 0 ]; then
+    NODES="$@"
+else
+    NODES=$("$PY" -c "
+import yaml
+c = yaml.safe_load(open('$HUB_BASE/config.yaml').read())
+import socket, re
+hn = socket.gethostname()
+def is_self(n):
+    for h in n.get('hostname_hints') or []:
+        if h in hn: return True
+    return n['name'] in hn
+print(' '.join(n['name'] for n in c['nodes']
+                if n.get('enabled', True) and not is_self(n)))
+")
+fi
+
+echo "[bootstrap-remote] target nodes: $NODES"
+echo "[bootstrap-remote] hub_base=$HUB_BASE  remote_base=$REMOTE_BASE"
+echo ""
+
+for n in $NODES; do
+    echo "============== $n =============="
+    SSH_HOST=$("$PY" -c "
+import yaml
+c = yaml.safe_load(open('$HUB_BASE/config.yaml').read())
+for x in c['nodes']:
+    if x['name']=='$n':
+        print(x.get('ssh', x['name']))
+        break
+")
+    if [ -z "$SSH_HOST" ]; then
+        echo "  SKIP: unknown node"
+        continue
+    fi
+
+    # 1. 远端建目录
+    ssh -o BatchMode=yes -o ConnectTimeout=5 "$SSH_HOST" "
+        mkdir -p $REMOTE_BASE/{agent,bin,tasks/{pending,claimed,running,done,failed},heartbeat,logs/_agent,logs/$n,agent_state/$n,projects,envs}
+    " || { echo "  FAIL: mkdir on $n"; continue; }
+
+    # 2. rsync 代码/配置
+    rsync -az --delete -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+        "$HUB_BASE/agent/" "$SSH_HOST:$REMOTE_BASE/agent/" || { echo "  FAIL: rsync agent"; continue; }
+    rsync -az -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+        "$HUB_BASE/config.yaml" "$SSH_HOST:$REMOTE_BASE/config.yaml" || { echo "  FAIL: rsync config"; continue; }
+    rsync -az --delete -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+        "$HUB_BASE/bin/" "$SSH_HOST:$REMOTE_BASE/bin/" || { echo "  FAIL: rsync bin"; continue; }
+    ssh -o BatchMode=yes "$SSH_HOST" "chmod +x $REMOTE_BASE/bin/*"
+    echo "  [ok] code synced"
+
+    # 3. rsync 项目 (不含 venv)
+    rsync -az --delete \
+        --exclude='.venv/' --exclude='.pytest_cache/' --exclude='__pycache__/' \
+        --exclude='*.pyc' --exclude='wandb/' --exclude='.cursor/' \
+        --exclude='results/' --exclude='logs/' \
+        -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+        "$HUB_BASE/projects/SafeTransport/" "$SSH_HOST:$REMOTE_BASE/projects/SafeTransport/" \
+        || { echo "  FAIL: rsync project"; continue; }
+    echo "  [ok] project synced"
+
+    # 4. 安装 uv (如果还没有) + uv sync 项目环境
+    ssh -o BatchMode=yes "$SSH_HOST" "bash -lc '
+        set -e
+        export PATH=\$HOME/.local/bin:\$PATH
+        if ! command -v uv >/dev/null; then
+            echo \"    installing uv on $n ...\"
+            curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || {
+                pip install --user uv 2>&1 | tail -2
+            }
+            export PATH=\$HOME/.local/bin:\$PATH
+        fi
+        echo \"    uv: \$(uv --version 2>&1)\"
+        cd $REMOTE_BASE/projects/SafeTransport
+        UV_PROJECT_ENVIRONMENT=$REMOTE_BASE/envs/safetransport uv sync --frozen --python 3.10 2>&1 | tail -3
+        echo \"    [ok] env ready\"
+    '" || echo "  WARN: env sync failed on $n (看下面)"
+
+    # 5. 启动 agent
+    ssh -o BatchMode=yes "$SSH_HOST" "
+        CLUSTER_BASE=$REMOTE_BASE CLUSTER_HOST=$n $REMOTE_BASE/bin/agent-start $n
+    " || { echo "  WARN: agent-start failed"; }
+    echo ""
+done
+
+echo ""
+echo "[done] 远端 bootstrap 结束"
+echo "       查看状态: cluster status  (中心 hub 需要运行 sync_hub 来收集心跳)"

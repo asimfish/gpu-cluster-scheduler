@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+PIDFILE="$BASE/logs/_agent/sync_hub.pid"
+[ -f "$PIDFILE" ] || { echo "sync_hub not running"; exit 0; }
+PID=$(cat "$PIDFILE")
+if kill -0 "$PID" 2>/dev/null; then
+    kill -TERM "$PID"
+    echo "sent SIGTERM to sync_hub (pid=$PID)"
+fi
+rm -f "$PIDFILE"

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+PY="$BASE/envs/safetransport/bin/python"
+if [ ! -x "$PY" ]; then PY="$(command -v python3)"; fi
+PORT="${1:-8765}"
+LOG_DIR="$BASE/logs/_agent"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/dashboard.log"
+PIDFILE="$LOG_DIR/dashboard.pid"
+
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "dashboard already running pid=$(cat "$PIDFILE")"
+    exit 0
+fi
+
+nohup "$PY" "$BASE/agent/web_dashboard.py" --port "$PORT" --base "$BASE" \
+    >> "$LOG" 2>&1 &
+echo $! > "$PIDFILE"
+sleep 1
+echo "started dashboard pid=$(cat "$PIDFILE") port=$PORT log=$LOG"
+echo "open: http://$(hostname -I | awk '{print $1}'):$PORT"

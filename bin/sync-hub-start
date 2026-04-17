@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# 中心节点 (共享盘这一台) 启动 sync_hub 后台服务
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+PY="$BASE/envs/safetransport/bin/python"
+LOG_DIR="$BASE/logs/_agent"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/sync_hub.log"
+PIDFILE="$LOG_DIR/sync_hub.pid"
+
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "sync_hub already running pid=$(cat "$PIDFILE")"
+    exit 0
+fi
+
+nohup "$PY" "$BASE/agent/sync_hub.py" \
+    --hub-base "$BASE" \
+    --remote-base "${CLUSTER_REMOTE_BASE:-/home/dataset-local/cluster-liyufeng}" \
+    --interval "${CLUSTER_SYNC_INTERVAL:-15}" \
+    >> "$LOG" 2>&1 &
+echo $! > "$PIDFILE"
+sleep 1
+echo "started sync_hub pid=$(cat "$PIDFILE") log=$LOG"

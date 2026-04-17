@@ -1,0 +1,26 @@
+# 验证调度能跑通的最小任务 (占用 ~2min, 极低显存)
+common:
+  project: SafeTransport
+  cwd: /home/dataset-assist-0/cluster-liyufeng/projects/SafeTransport
+  gpu: 1
+  gpu_mem: 5         # 只要 5GB, 很容易满足
+  priority: 9
+  timeout_h: 0.1     # 6 分钟超时
+
+tasks:
+  - tag: sanity_gpu
+    cmd: |
+      python -c "
+      import torch, time, os
+      print('CUDA_VISIBLE_DEVICES =', os.environ.get('CUDA_VISIBLE_DEVICES'))
+      print('task_id =', os.environ.get('CLUSTER_TASK_ID'))
+      print('host =', os.environ.get('CLUSTER_HOST'))
+      print('device count =', torch.cuda.device_count())
+      x = torch.randn(1024, 1024, device='cuda')
+      for i in range(30):
+          x = x @ x.T
+          x = torch.relu(x)
+          print(f'[{i}] mem={torch.cuda.memory_allocated()/1e9:.2f}GB')
+          time.sleep(2)
+      print('done')
+      "

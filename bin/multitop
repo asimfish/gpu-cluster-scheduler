@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+PY="$BASE/envs/safetransport/bin/python"
+if [ ! -x "$PY" ]; then
+    PY="$(command -v python3)"
+fi
+exec "$PY" "$BASE/agent/multitop.py" "$@"

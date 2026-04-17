@@ -1,0 +1,42 @@
+# ==============================================
+# DAG 工作流示例
+# 用法: cluster submit-dag examples/dag_example.yaml
+# ==============================================
+# 三阶段流水线: train(3 seeds) -> eval(汇总) -> report
+common:
+  project: SafeTransport
+  cwd: /home/dataset-assist-0/cluster-liyufeng/projects/SafeTransport
+  gpu: 1
+  gpu_mem: 40
+  env:
+    WANDB_MODE: offline
+
+stages:
+  - name: train
+    tasks:
+      - tag: safeflow_s0
+        cmd: python experiments/run_safeflow_v2.py --seed 0
+        timeout_h: 8
+      - tag: safeflow_s1
+        cmd: python experiments/run_safeflow_v2.py --seed 1
+        timeout_h: 8
+      - tag: safeflow_s2
+        cmd: python experiments/run_safeflow_v2.py --seed 2
+        timeout_h: 8
+
+  - name: eval
+    # 自动依赖 train stage 的所有任务
+    tasks:
+      - tag: eval_all
+        cmd: python experiments/eval_all.py --seeds 0,1,2
+        gpu: 1
+        timeout_h: 2
+
+  - name: report
+    # 自动依赖 eval stage 的所有任务
+    tasks:
+      - tag: gen_report
+        cmd: python experiments/gen_report.py
+        gpu: 0
+        gpu_mem: 0
+        timeout_h: 0.5

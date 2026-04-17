@@ -1,0 +1,90 @@
+base_dir: /home/dataset-assist-0/cluster-liyufeng
+nodes:
+- name: pub-1
+  ssh: pub-1
+  total_gpus: 8
+  enabled: true
+  tags:
+  - a100-80g
+  hostname_hints:
+  - ide-650ef93f23324f04881bde87cf05d6c1
+- name: main
+  ssh: main
+  total_gpus: 8
+  enabled: true
+  tags:
+  - a100-80g
+  hostname_hints:
+  - mainskill-042979
+- name: lotus-1
+  ssh: lotus-1
+  total_gpus: 8
+  enabled: true
+  tags:
+  - a100-80g
+  hostname_hints:
+  - lotus-1-aff862
+- name: lotus-2
+  ssh: lotus-2
+  total_gpus: 8
+  enabled: true
+  tags:
+  - a100-80g
+  hostname_hints:
+  - lotus-75-aceb02
+- name: pub-2
+  ssh: pub-2
+  total_gpus: 8
+  enabled: false
+  tags:
+  - a100-80g
+  hostname_hints:
+  - ide-7e33a68268b54c4b9512a8ca868790c2
+  note: pub-2 SSH pubkey 未推上, 加好后改回 true
+safety:
+  gpu_free_mem_gb_min: 40
+  gpu_util_max_percent: 30
+  node_cpu_load_ratio_max: 0.85
+  node_mem_free_gb_min: 32
+  max_tasks_per_node: 6
+  max_global_tasks: 30
+  quiet_hours: []
+  kill_only_owned: true
+scheduler:
+  heartbeat_interval_sec: 10
+  claim_interval_sec: 5
+  dead_after_sec: 60
+  idle_confirm_rounds: 2
+  default_timeout_h: 24
+logging:
+  max_log_mb: 500
+  tail_lines_on_fail: 200
+owner: liyufeng
+
+notify:
+  enabled: false
+  on_done: true
+  on_failed: true
+  on_agent_recover: true
+  feishu:
+    webhook: ""
+  email:
+    smtp_host: ""
+    smtp_port: 465
+    smtp_user: ""
+    smtp_pass: ""
+    to: []
+    use_ssl: true
+  webhook:
+    url: ""
+    headers: {}
+
+quotas:
+  per_project:
+    SafeTransport:
+      max_running: 20
+      max_gpus: 32
+  per_user:
+    liyufeng:
+      max_running: 25
+      max_gpus: 36

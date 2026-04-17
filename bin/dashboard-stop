@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+PIDFILE="$BASE/logs/_agent/dashboard.pid"
+[ -f "$PIDFILE" ] || { echo "dashboard not running"; exit 0; }
+PID=$(cat "$PIDFILE")
+if kill -0 "$PID" 2>/dev/null; then
+    kill -TERM "$PID"
+    echo "stopped dashboard (pid=$PID)"
+fi
+rm -f "$PIDFILE"

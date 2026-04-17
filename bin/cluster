@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# 统一入口: 自动用共享盘上的 Python 环境跑 CLI
+BASE="${CLUSTER_BASE:-/home/dataset-assist-0/cluster-liyufeng}"
+PY="$BASE/envs/safetransport/bin/python"
+if [ ! -x "$PY" ]; then
+    # 没有共享盘 venv 就退到系统 python
+    PY="$(command -v python3)"
+fi
+exec "$PY" "$BASE/agent/cluster_cli.py" "$@"
