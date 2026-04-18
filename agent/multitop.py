@@ -346,11 +346,11 @@ def run(args):
             # Non-blocking keyboard input for scroll
             import select, tty, termios
             fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            try:
+            if not hasattr(args, '_old_term'):
+                args._old_term = termios.tcgetattr(fd)
                 tty.setcbreak(fd)
-                deadline = time.time() + args.interval
-                while time.time() < deadline:
+            deadline = time.time() + args.interval
+            while time.time() < deadline:
                     rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
                     if rlist:
                         ch = sys.stdin.read(1)
@@ -424,8 +424,7 @@ def run(args):
                         elif ch == 'G':
                             _scroll_offset[0] = max(0, len(flat) - term_h + 2)
                             break
-            finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
     except KeyboardInterrupt:
         print("\nbye")
 
