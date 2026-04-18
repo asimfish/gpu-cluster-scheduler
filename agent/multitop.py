@@ -80,7 +80,7 @@ def gpu_line(g: Dict, compact: bool) -> str:
     if procs:
         # 取最大显存的那个进程显示
         top = max(procs, key=lambda x: x.get("mem_mb", 0))
-        tag = f" {top.get('user', '?')}:{top.get('name', '')[:14]}:{top.get('mem_mb', 0)/1024:.1f}G"
+        tag = f" {top.get('user', '?')}:{top.get('name', '')[:22]}:{top.get('mem_mb', 0)/1024:.1f}G"
         if len(procs) > 1:
             tag += f"(+{len(procs)-1})"
         pname = grey(tag)
@@ -95,12 +95,18 @@ def node_block(host: str, snap: Dict, stale_sec: float) -> str:
     if snap_time == 0:
         return grey(f"[{host}] no heartbeat")
     age = time.time() - snap_time
-    if age > stale_sec:
+    stale = age > stale_sec
+    if stale:
         if age > 86400:
             head = red(f"[{host}] OFFLINE (last seen {int(age/3600)}h ago)")
         else:
             head = red(f"[{host}] STALE {int(age)}s ago")
-        return head
+        if not snap.get("gpus"):
+            return head
+        lines = [head]
+        for g in snap.get("gpus", []):
+            lines.append(grey(gpu_line(g, compact=True)))
+        return chr(10).join(lines)
     load1 = snap.get("load1", 0)
     ncpu = snap.get("cpu_count", 1)
     load_ratio = load1 / max(ncpu, 1)
@@ -215,7 +221,7 @@ def ssh_probe_all(nodes_cfg: List[Dict]) -> Dict[str, Dict]:
 
 
 def cluster_summary(snaps: Dict[str, Dict]) -> str:
-    ngpu = sum(len(s.get("gpus", [])) for s in snaps.values())
+    ngpu = sum(len(s.get("gpus", [])) for s in snaps.values() if s.get("time", 0) > 0)
     free_mem_total = 0.0
     idle_gpus = 0
     for s in snaps.values():
@@ -234,10 +240,12 @@ def cluster_summary(snaps: Dict[str, Dict]) -> str:
 def run(args):
     base = Path(args.base)
     cfg = load_yaml(base / "config.yaml")
-    nodes_cfg = [n for n in cfg.get("nodes", []) if n.get("enabled", True)]
+    all_nodes = cfg.get("nodes", [])
     if args.nodes:
-        nodes_cfg = [n for n in nodes_cfg if n["name"] in args.nodes]
-    names = [n["name"] for n in nodes_cfg]
+        all_nodes = [n for n in all_nodes if n["name"] in args.nodes]
+    nodes_cfg = [n for n in all_nodes if n.get("enabled", True)]
+    disabled_names = {n["name"] for n in all_nodes if not n.get("enabled", True)}
+    names = [n["name"] for n in all_nodes]
 
     try:
         while True:
@@ -247,6 +255,14 @@ def run(args):
                 snaps = ssh_probe_all(nodes_cfg)
             else:
                 snaps = read_heartbeats(base, names)
+                # Also read disabled nodes' heartbeats if available
+                for dn in disabled_names:
+                    if dn not in snaps:
+                        try:
+                            p = base / "heartbeat" / f"{dn}.json"
+                            snaps[dn] = json.loads(p.read_text())
+                        except Exception:
+                            snaps[dn] = {"host": dn, "time": 0, "gpus": []}
             # 清屏
             if not args.no_clear:
                 sys.stdout.write("\x1b[H\x1b[2J")
@@ -255,8 +271,17 @@ def run(args):
             print(cluster_summary(snaps))
             print("-" * min(term_w, 120))
             for name in names:
-                s = snaps.get(name, {"host": name, "time": 0, "gpus": []})
-                print(node_block(name, s, stale_sec=args.stale))
+                if name in disabled_names:
+                    s = snaps.get(name, {"host": name, "time": 0, "gpus": []})
+                    if s.get("time", 0) > 0:
+                        print(grey(f"[{name}] DISABLED") + "  " + grey(f"(heartbeat {int(time.time()-s['time'])}s ago)"))
+                        for g in s.get("gpus", []):
+                            print(grey(gpu_line(g, compact=True)))
+                    else:
+                        print(grey(f"[{name}] DISABLED (no heartbeat)"))
+                else:
+                    s = snaps.get(name, {"host": name, "time": 0, "gpus": []})
+                    print(node_block(name, s, stale_sec=args.stale))
                 print()
             sys.stdout.flush()
             if args.once:
