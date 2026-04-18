@@ -11,11 +11,12 @@ nodes:
 - name: main
   ssh: main
   total_gpus: 8
-  enabled: true
+  enabled: false
   tags:
   - a100-80g
   hostname_hints:
   - mainskill-042979
+  note: main not mount dataset-assist-0, need envs+projects setup
 - name: lotus-1
   ssh: lotus-1
   total_gpus: 8

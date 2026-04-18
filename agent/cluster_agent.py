@@ -464,9 +464,10 @@ class Agent:
 
         try:
             proc = subprocess.Popen(
-                task.cmd, shell=True, cwd=task.cwd, env=env,
+                task.cmd, shell=True, executable='/bin/bash',
+                cwd=task.cwd, env=env,
                 stdout=log_fh, stderr=subprocess.STDOUT,
-                preexec_fn=os.setsid,  # 单独进程组,kill 整组
+                preexec_fn=os.setsid,
             )
         except Exception as e:
             log_fh.write(f"!! launch failed: {e}\n")

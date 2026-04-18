@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.4.0 (2026-04-19)
+
+### Bug Fixes
+
+- **Shell Compatibility**: Agent `_launch()` 改用 `executable='/bin/bash'`，修复 `source` 命令在 dash (`/bin/sh`) 下报 `command not found` 的问题
+- **Tensorboard Optional**: `Logger` 中 tensorboard import 改为可选（try/except + warning），缺失时自动降级为 CSV-only 日志
+- **Tensorboard Installed**: 通过 VPN 在 safetransport 环境中成功安装 tensorboard 2.20.0
+
+### Maintenance
+
+- 清理 21 个僵尸 running 任务（进程已死但状态文件未更新）
+- 禁用 main 节点（缺少 envs/projects，需额外部署）
+- 恢复 main 误认领的 15 个任务到 pending 队列
+- 在 main 节点创建 `/home/dataset-assist-0/cluster-liyufeng -> /home/dataset-local/cluster-liyufeng` 符号链接
+
+### Verified
+
+- sanity-v2 测试通过: rc=0, GPU 正常, 环境变量注入正确
+
+
 ## v1.3.0 (2026-04-18)
 
 ### Multi-User Support
