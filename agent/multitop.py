@@ -92,10 +92,10 @@ def gpu_line(g: Dict, compact: bool) -> str:
     return s
 
 
-def process_table(snaps: Dict[str, Dict], term_w: int) -> str:
+def process_table(snaps: Dict[str, Dict], term_w: int, selected: int = -1, all_procs_out: Optional[list] = None) -> str:
     """nvitop-style process list across all nodes."""
     lines = []
-    lines.append(bold('Processes:'))
+    lines.append(bold('Processes:') + '  ' + grey('[K]ill selected  [Tab]select'))
     header = f"  {'HOST':<10} {'GPU':>3} {'PID':>8} {'USER':<12} {'MEM':>7} {'CMD':<40}"
     lines.append(cyan(header))
     lines.append('-' * min(term_w, 90))
@@ -114,6 +114,9 @@ def process_table(snaps: Dict[str, Dict], term_w: int) -> str:
                     'name': proc.get('name', ''),
                 })
     procs.sort(key=lambda x: (-x['mem_mb'],))
+    if all_procs_out is not None:
+        all_procs_out.clear()
+        all_procs_out.extend(procs)
     for i, p in enumerate(procs):
         mem_str = f"{p['mem_mb']/1024:.1f}G" if p['mem_mb'] >= 1024 else f"{p['mem_mb']}M"
         cmd = p['name']
@@ -121,6 +124,8 @@ def process_table(snaps: Dict[str, Dict], term_w: int) -> str:
             cmd = '...' + cmd[-35:]
         mem_c = red if p['mem_mb'] > 20000 else (yellow if p['mem_mb'] > 5000 else green)
         line = f"  {p['host']:<10} {p['gpu']:>3} {p['pid']:>8} {p['user']:<12} {mem_c(f'{mem_str:>7}')} {cmd:<40}"
+        if i == selected:
+            line = _c(f'> {line[2:]}', '7')  # reverse video highlight
         lines.append(line)
     if not procs:
         lines.append(grey('  (no GPU processes)'))
@@ -286,6 +291,10 @@ def run(args):
     names = [n["name"] for n in all_nodes]
 
     _scroll_offset = [0]  # mutable for closure
+    _selected_proc = [0]  # index into process list
+    _show_kill_confirm = [False]
+    _kill_msg = ['']
+    _all_procs = [[]]  # shared process list (list of list for mutability)
     # Enable mouse wheel tracking
     if not args.once and not args.no_clear:
         sys.stdout.write('[?1000h[?1006h')  # enable mouse + SGR mode
@@ -367,8 +376,39 @@ def run(args):
                             elif seq == '[B':  # down arrow
                                 _scroll_offset[0] = min(_scroll_offset[0] + 1, max(0, len(flat) - term_h + 2))
                                 break
+                            elif seq == '[Z':  # Shift+Tab - select previous
+                                procs = _all_procs[0]
+                                if procs:
+                                    _selected_proc[0] = (_selected_proc[0] - 1) % len(procs)
+                                break
                         elif ch == 'q':
                             raise KeyboardInterrupt
+                        elif ch == 'K' or ch == 'x':
+                            # Kill selected process
+                            procs = _all_procs[0]
+                            idx = _selected_proc[0]
+                            if 0 <= idx < len(procs):
+                                proc = procs[idx]
+                                host = proc['host']
+                                pid = proc['pid']
+                                try:
+                                    import subprocess as _sp
+                                    if host == os.popen('hostname').read().strip().split('-')[0]:
+                                        os.kill(pid, 15)
+                                    else:
+                                        _sp.run(['ssh', host, f'kill {pid}'], timeout=5)
+                                    _kill_msg[0] = f'Sent SIGTERM to {host}:{pid}'
+                                except Exception as e:
+                                    _kill_msg[0] = f'Kill failed: {e}'
+                            break
+                        elif ch == chr(9):  # Tab
+                            procs = _all_procs[0]
+                            if procs:
+                                _selected_proc[0] = (_selected_proc[0] + 1) % len(procs)
+                            break
+                        elif ch == chr(10):  # Enter - deselect
+                            _selected_proc[0] = -1
+                            break
                         elif ch == 'j' or ch == ' ':
                             _scroll_offset[0] = min(_scroll_offset[0] + 5, max(0, len(flat) - term_h + 2))
                             break
