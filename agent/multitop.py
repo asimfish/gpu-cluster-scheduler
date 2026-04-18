@@ -285,10 +285,7 @@ def run(args):
     disabled_names = {n["name"] for n in all_nodes if not n.get("enabled", True)}
     names = [n["name"] for n in all_nodes]
 
-    term_h = shutil.get_terminal_size((120, 30)).lines
-    if not args.once and not args.no_clear:
-        sys.stdout.write("[?1049h")  # alternate screen buffer
-        sys.stdout.flush()
+    _scroll_offset = [0]  # mutable for closure
     try:
         while True:
             ts = time.strftime("%H:%M:%S")
@@ -333,7 +330,36 @@ def run(args):
             sys.stdout.flush()
             if args.once:
                 return
-            time.sleep(args.interval)
+            # Non-blocking keyboard input for scroll
+            import select, tty, termios
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setcbreak(fd)
+                deadline = time.time() + args.interval
+                while time.time() < deadline:
+                    rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+                    if rlist:
+                        ch = sys.stdin.read(1)
+                        if ch == 'q':
+                            raise KeyboardInterrupt
+                        elif ch == 'j' or ch == ' ':
+                            _scroll_offset[0] = min(_scroll_offset[0] + 5, max(0, len(flat) - term_h + 2))
+                            break
+                        elif ch == 'k':
+                            _scroll_offset[0] = max(0, _scroll_offset[0] - 5)
+                            break
+                        elif ch == 'c':
+                            args.compact = not args.compact
+                            break
+                        elif ch == 'g':
+                            _scroll_offset[0] = 0
+                            break
+                        elif ch == 'G':
+                            _scroll_offset[0] = max(0, len(flat) - term_h + 2)
+                            break
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     except KeyboardInterrupt:
         print("\nbye")
 
