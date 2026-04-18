@@ -296,7 +296,7 @@ def run(args):
     _kill_msg = ['']
     _all_procs = [[]]  # shared process list (list of list for mutability)
     # Enable mouse/keyboard interaction only in full mode
-    if args.full and not args.once and not args.no_clear:
+    if args.full and not not args.live and args.live:
         sys.stdout.write('[?1000h[?1006h')  # enable mouse + SGR mode
         sys.stdout.flush()
     try:
@@ -317,7 +317,7 @@ def run(args):
                         except Exception:
                             snaps[dn] = {"host": dn, "time": 0, "gpus": []}
             # 清屏
-            if not args.no_clear:
+            if args.live:
                 sys.stdout.write("\x1b[H\x1b[2J")
             header = f"{bold(magenta('MultiTop'))}  base={base}  mode={'SSH' if args.ssh else 'HB'}  {grey(ts)}  (Ctrl-C to quit)"
             print(header)
@@ -341,10 +341,10 @@ def run(args):
                 print()
                 print(process_table(snaps, term_w))
             sys.stdout.flush()
-            if args.once:
+            if not args.live:
                 return
             if not args.full:
-                if args.once:
+                if not args.live:
                     return
                 time.sleep(args.interval)
                 continue
@@ -442,7 +442,7 @@ def main():
     ap.add_argument("--ssh", action="store_true", help="不读心跳,用 SSH 实时查")
     ap.add_argument("--nodes", nargs="+", help="只看指定节点")
     ap.add_argument("--stale", type=float, default=30, help="心跳过期秒数")
-    ap.add_argument("--once", action="store_true", help="只打印一次,便于 pipe")
+    ap.add_argument("--live", action="store_true", help="实时刷新模式 (默认只打印一次)")
     ap.add_argument("--no-clear", action="store_true")
     ap.add_argument("--full", action="store_true", help="显示进程列表 + 交互式操作 (kill/select)")
     args = ap.parse_args()
