@@ -286,6 +286,10 @@ def run(args):
     names = [n["name"] for n in all_nodes]
 
     _scroll_offset = [0]  # mutable for closure
+    # Enable mouse wheel tracking
+    if not args.once and not args.no_clear:
+        sys.stdout.write('[?1000h[?1006h')  # enable mouse + SGR mode
+        sys.stdout.flush()
     try:
         while True:
             ts = time.strftime("%H:%M:%S")
@@ -341,7 +345,29 @@ def run(args):
                     rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
                     if rlist:
                         ch = sys.stdin.read(1)
-                        if ch == 'q':
+                        if ch == '':
+                            # Escape sequence (arrow keys or mouse)
+                            seq = ''
+                            while select.select([sys.stdin], [], [], 0.02)[0]:
+                                seq += sys.stdin.read(1)
+                            if seq.startswith('[<'):
+                                # SGR mouse: [<btn;x;y[Mm]
+                                parts = seq[2:].rstrip('mM').split(';')
+                                if len(parts) >= 3:
+                                    btn = int(parts[0])
+                                    if btn == 64:  # scroll up
+                                        _scroll_offset[0] = max(0, _scroll_offset[0] - 3)
+                                        break
+                                    elif btn == 65:  # scroll down
+                                        _scroll_offset[0] = min(_scroll_offset[0] + 3, max(0, len(flat) - term_h + 2))
+                                        break
+                            elif seq == '[A':  # up arrow
+                                _scroll_offset[0] = max(0, _scroll_offset[0] - 1)
+                                break
+                            elif seq == '[B':  # down arrow
+                                _scroll_offset[0] = min(_scroll_offset[0] + 1, max(0, len(flat) - term_h + 2))
+                                break
+                        elif ch == 'q':
                             raise KeyboardInterrupt
                         elif ch == 'j' or ch == ' ':
                             _scroll_offset[0] = min(_scroll_offset[0] + 5, max(0, len(flat) - term_h + 2))
