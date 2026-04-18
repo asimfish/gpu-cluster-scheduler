@@ -247,10 +247,15 @@ def run(args):
     disabled_names = {n["name"] for n in all_nodes if not n.get("enabled", True)}
     names = [n["name"] for n in all_nodes]
 
+    term_h = shutil.get_terminal_size((120, 30)).lines
+    if not args.once and not args.no_clear:
+        sys.stdout.write("[?1049h")  # alternate screen buffer
+        sys.stdout.flush()
     try:
         while True:
             ts = time.strftime("%H:%M:%S")
             term_w = shutil.get_terminal_size((120, 30)).columns
+            term_h = shutil.get_terminal_size((120, 30)).lines
             if args.ssh:
                 snaps = ssh_probe_all(nodes_cfg)
             else:
