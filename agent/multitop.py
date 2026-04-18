@@ -295,8 +295,8 @@ def run(args):
     _show_kill_confirm = [False]
     _kill_msg = ['']
     _all_procs = [[]]  # shared process list (list of list for mutability)
-    # Enable mouse wheel tracking
-    if not args.once and not args.no_clear:
+    # Enable mouse/keyboard interaction only in full mode
+    if args.full and not args.once and not args.no_clear:
         sys.stdout.write('[?1000h[?1006h')  # enable mouse + SGR mode
         sys.stdout.flush()
     try:
@@ -337,13 +337,18 @@ def run(args):
                     print(node_block(name, s, stale_sec=args.stale))
                 print()
             # Process table (nvitop-style)
-            if not args.compact:
+            if args.full:
                 print()
                 print(process_table(snaps, term_w))
             sys.stdout.flush()
             if args.once:
                 return
-            # Non-blocking keyboard input for scroll
+            if not args.full:
+                if args.once:
+                    return
+                time.sleep(args.interval)
+                continue
+            # Non-blocking keyboard input (full mode only)
             import select, tty, termios
             fd = sys.stdin.fileno()
             if not hasattr(args, '_old_term'):
@@ -416,7 +421,7 @@ def run(args):
                             _scroll_offset[0] = max(0, _scroll_offset[0] - 5)
                             break
                         elif ch == 'c':
-                            args.compact = not args.compact
+                            args.compact = args.full
                             break
                         elif ch == 'g':
                             _scroll_offset[0] = 0
@@ -439,7 +444,7 @@ def main():
     ap.add_argument("--stale", type=float, default=30, help="心跳过期秒数")
     ap.add_argument("--once", action="store_true", help="只打印一次,便于 pipe")
     ap.add_argument("--no-clear", action="store_true")
-    ap.add_argument("--compact", action="store_true", help="不显示进程列表 (仅 GPU 概览)")
+    ap.add_argument("--full", action="store_true", help="显示进程列表 + 交互式操作 (kill/select)")
     args = ap.parse_args()
     run(args)
 
