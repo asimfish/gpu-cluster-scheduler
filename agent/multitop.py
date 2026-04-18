@@ -78,9 +78,11 @@ def gpu_line(g: Dict, compact: bool) -> str:
     temp_c = green if temp < 60 else (yellow if temp < 80 else red)
     pname = ""
     if procs:
-        # 取最大显存的那个进程显示
         top = max(procs, key=lambda x: x.get("mem_mb", 0))
-        tag = f" {top.get('user', '?')}:{top.get('name', '')[:22]}:{top.get('mem_mb', 0)/1024:.1f}G"
+        name_short = top.get('name', '')
+        if len(name_short) > 22:
+            name_short = '...' + name_short[-19:]
+        tag = f" {top.get('user', '?')}:{name_short}:{top.get('mem_mb', 0)/1024:.1f}G"
         if len(procs) > 1:
             tag += f"(+{len(procs)-1})"
         pname = grey(tag)
@@ -88,6 +90,42 @@ def gpu_line(g: Dict, compact: bool) -> str:
          f"{mem_bar} {gb_used:>5.1f}/{gb_total:>4.1f}G  "
          f"{temp_c(f'{temp:>2d}°')}C {power:>5.1f}W{pname}")
     return s
+
+
+def process_table(snaps: Dict[str, Dict], term_w: int) -> str:
+    """nvitop-style process list across all nodes."""
+    lines = []
+    lines.append(bold('Processes:'))
+    header = f"  {'HOST':<10} {'GPU':>3} {'PID':>8} {'USER':<12} {'MEM':>7} {'CMD':<40}"
+    lines.append(cyan(header))
+    lines.append('-' * min(term_w, 90))
+    procs = []
+    for host, snap in sorted(snaps.items()):
+        if snap.get('time', 0) == 0:
+            continue
+        for g in snap.get('gpus', []):
+            for proc in g.get('processes', []):
+                procs.append({
+                    'host': host,
+                    'gpu': g['index'],
+                    'pid': proc.get('pid', 0),
+                    'user': proc.get('user', '?'),
+                    'mem_mb': proc.get('mem_mb', 0),
+                    'name': proc.get('name', ''),
+                })
+    procs.sort(key=lambda x: (-x['mem_mb'],))
+    for i, p in enumerate(procs):
+        mem_str = f"{p['mem_mb']/1024:.1f}G" if p['mem_mb'] >= 1024 else f"{p['mem_mb']}M"
+        cmd = p['name']
+        if len(cmd) > 38:
+            cmd = '...' + cmd[-35:]
+        mem_c = red if p['mem_mb'] > 20000 else (yellow if p['mem_mb'] > 5000 else green)
+        line = f"  {p['host']:<10} {p['gpu']:>3} {p['pid']:>8} {p['user']:<12} {mem_c(f'{mem_str:>7}')} {cmd:<40}"
+        lines.append(line)
+    if not procs:
+        lines.append(grey('  (no GPU processes)'))
+    lines.append(f"  {grey(f'total: {len(procs)} processes')}")
+    return chr(10).join(lines)
 
 
 def node_block(host: str, snap: Dict, stale_sec: float) -> str:
@@ -288,6 +326,10 @@ def run(args):
                     s = snaps.get(name, {"host": name, "time": 0, "gpus": []})
                     print(node_block(name, s, stale_sec=args.stale))
                 print()
+            # Process table (nvitop-style)
+            if not args.compact:
+                print()
+                print(process_table(snaps, term_w))
             sys.stdout.flush()
             if args.once:
                 return
@@ -306,6 +348,7 @@ def main():
     ap.add_argument("--stale", type=float, default=30, help="心跳过期秒数")
     ap.add_argument("--once", action="store_true", help="只打印一次,便于 pipe")
     ap.add_argument("--no-clear", action="store_true")
+    ap.add_argument("--compact", action="store_true", help="不显示进程列表 (仅 GPU 概览)")
     args = ap.parse_args()
     run(args)
 
