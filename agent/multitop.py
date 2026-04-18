@@ -346,6 +346,7 @@ def run(args):
             if not args.full:
                 if not args.live:
                     return
+                sys.stdout.write(chr(10))  # blank line between refreshes
                 time.sleep(args.interval)
                 continue
             # Non-blocking keyboard input (full mode only)
